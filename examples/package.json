@@ -1,0 +1,13 @@
+{
+  "name": "html-to-image-examples",
+  "version": "1.0.0",
+  "description": "Example clients for the HTML to Image API",
+  "main": "client.js",
+  "scripts": {
+    "start": "node client.js",
+    "serve-html": "python3 -m http.server 8080"
+  },
+  "dependencies": {
+    "axios": "^1.6.2"
+  }
+}
