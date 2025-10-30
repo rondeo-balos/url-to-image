@@ -125,7 +125,7 @@ fi
 if command -v ufw &> /dev/null; then
     print_status "Configuring firewall..."
     ufw allow 22/tcp
-    ufw allow 80/tcp
+    ufw allow 3000/tcp
     ufw allow 443/tcp
     ufw --force enable
 fi
@@ -193,4 +193,4 @@ echo "• Restart app: pm2 restart $PROJECT_NAME"
 echo "• Check status: pm2 status"
 echo "• Nginx logs: tail -f /var/log/nginx/error.log"
 echo ""
-print_status "Your API should be available at: http://your-domain.com"
+print_status "Your API should be available at: http://your-domain.com:3000"

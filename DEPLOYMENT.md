@@ -122,7 +122,7 @@ sudo systemctl enable nginx
 ```bash
 # Setup UFW firewall
 sudo ufw allow 22/tcp
-sudo ufw allow 80/tcp
+sudo ufw allow 3000/tcp
 sudo ufw allow 443/tcp
 sudo ufw enable
 ```
@@ -194,7 +194,6 @@ sudo systemctl restart nginx
 
 # Check port usage
 sudo netstat -tlnp | grep :3000
-sudo netstat -tlnp | grep :80
 ```
 
 ## Performance Optimization
@@ -363,5 +362,5 @@ If you encounter issues:
 4. Check system resources: `htop`, `df -h`, `free -h`
 
 Your API will be available at:
-- **HTTP**: `http://your-domain.com/screenshot?url=https://example.com&width=800&height=600`
-- **HTTPS**: `https://your-domain.com/screenshot?url=https://example.com&width=800&height=600`
+- **HTTP**: `http://your-domain.com:3000/screenshot?url=https://example.com&width=800&height=600`
+- **HTTPS**: `https://your-domain.com:3000/screenshot?url=https://example.com&width=800&height=600`
