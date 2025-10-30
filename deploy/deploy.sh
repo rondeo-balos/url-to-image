@@ -85,6 +85,14 @@ print_status "Setting file permissions..."
 chown -R $SERVICE_USER:$SERVICE_USER $PROJECT_DIR
 chmod -R 755 $PROJECT_DIR
 
+# Create PM2 directory for www-data user
+print_status "Setting up PM2 directories..."
+mkdir -p /var/www/.pm2/logs
+mkdir -p /var/www/.pm2/pids
+mkdir -p /var/www/.pm2/modules
+chown -R $SERVICE_USER:$SERVICE_USER /var/www/.pm2
+chmod -R 755 /var/www/.pm2
+
 # Create environment file
 print_status "Creating environment file..."
 if [ ! -f "$PROJECT_DIR/.env" ]; then
@@ -94,12 +102,17 @@ fi
 
 # Setup PM2
 print_status "Setting up PM2..."
-sudo -u $SERVICE_USER pm2 delete $PROJECT_NAME 2>/dev/null || true
-sudo -u $SERVICE_USER pm2 start $PROJECT_DIR/deploy/ecosystem.config.js --env $ENVIRONMENT
+# Set PM2_HOME for www-data user
+export PM2_HOME=/var/www/.pm2
+sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 delete $PROJECT_NAME 2>/dev/null || true
+sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 start $PROJECT_DIR/deploy/ecosystem.config.js --env $ENVIRONMENT
 
 # Save PM2 configuration
-sudo -u $SERVICE_USER pm2 save
-sudo -u $SERVICE_USER pm2 startup
+sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 save
+
+# Setup PM2 startup - this needs to be run as root to setup systemd
+print_status "Setting up PM2 startup script..."
+sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 startup systemd -u $SERVICE_USER --hp /var/www
 
 # Setup Nginx
 print_status "Configuring Nginx..."
@@ -141,6 +154,8 @@ After=network.target
 Type=simple
 User=$SERVICE_USER
 WorkingDirectory=$PROJECT_DIR
+Environment=PM2_HOME=/var/www/.pm2
+Environment=NODE_ENV=$ENVIRONMENT
 ExecStart=/usr/bin/pm2 start ecosystem.config.js --no-daemon --env $ENVIRONMENT
 ExecReload=/bin/kill -USR2 \$MAINPID
 Restart=always
@@ -157,7 +172,7 @@ systemctl enable $PROJECT_NAME
 print_status "Performing final checks..."
 
 # Check if PM2 process is running
-if sudo -u $SERVICE_USER pm2 list | grep -q $PROJECT_NAME; then
+if sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 list | grep -q $PROJECT_NAME; then
     print_status "PM2 process is running ✓"
 else
     print_error "PM2 process is not running ✗"
@@ -188,9 +203,9 @@ echo "4. Setup SSL certificate (recommended)"
 echo "5. Configure monitoring and backups"
 echo ""
 print_status "Useful commands:"
-echo "• Check logs: pm2 logs $PROJECT_NAME"
-echo "• Restart app: pm2 restart $PROJECT_NAME"
-echo "• Check status: pm2 status"
+echo "• Check logs: sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 logs $PROJECT_NAME"
+echo "• Restart app: sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 restart $PROJECT_NAME"
+echo "• Check status: sudo -u $SERVICE_USER PM2_HOME=/var/www/.pm2 pm2 status"
 echo "• Nginx logs: tail -f /var/log/nginx/error.log"
 echo ""
 print_status "Your API should be available at: http://your-domain.com:3000"
