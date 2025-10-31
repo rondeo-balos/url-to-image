@@ -1,7 +1,4 @@
 const express = require('express');
-const https = require('https');
-const fs = require('fs');
-const path = require('path');
 const { chromium } = require('playwright');
 const sharp = require('sharp');
 const cors = require('cors');
@@ -350,67 +347,11 @@ process.on('unhandledRejection', (reason, promise) => {
   }
 });
 
-// SSL Certificate paths
-const SSL_CERT_PATH = process.env.SSL_CERT_PATH || '/root/cert/n8n.gotobizpro.com.pem';
-const SSL_KEY_PATH = process.env.SSL_KEY_PATH || '/root/cert/n8n.gotobizpro.com.key';
-
-// HTTPS configuration
-let httpsOptions = null;
-
-// Check if SSL certificates exist
-function loadSSLCertificates() {
-  try {
-    if (fs.existsSync(SSL_CERT_PATH) && fs.existsSync(SSL_KEY_PATH)) {
-      httpsOptions = {
-        key: fs.readFileSync(SSL_KEY_PATH),
-        cert: fs.readFileSync(SSL_CERT_PATH)
-      };
-      console.log('✅ SSL certificates loaded successfully');
-      return true;
-    } else {
-      console.log('⚠️  SSL certificates not found, falling back to HTTP');
-      return false;
-    }
-  } catch (error) {
-    console.error('❌ Error loading SSL certificates:', error.message);
-    return false;
-  }
-}
-
-// Start server with HTTPS support
-const hasSSL = loadSSLCertificates();
-
-if (hasSSL && httpsOptions) {
-  // Create HTTPS server
-  const httpsServer = https.createServer(httpsOptions, app);
-  
-  httpsServer.listen(PORT, () => {
-    console.log(`🚀 HTML to Image HTTPS server running on port ${PORT}`);
-    console.log(`📖 API docs: https://localhost:${PORT}/api/docs`);
-    console.log(`🩺 Health check: https://localhost:${PORT}/health`);
-    console.log(`📸 Example: https://localhost:${PORT}/screenshot?url=https://example.com&width=1200&height=800`);
-    console.log(`🔒 SSL certificates: ${SSL_CERT_PATH}`);
-    console.log(`💡 Using per-request browser instances for better stability`);
-  });
-  
-  httpsServer.on('error', (error) => {
-    if (error.code === 'EACCES') {
-      console.error(`❌ Permission denied to bind to port ${PORT}. Try running with sudo or use a port > 1024.`);
-    } else if (error.code === 'EADDRINUSE') {
-      console.error(`❌ Port ${PORT} is already in use.`);
-    } else {
-      console.error('❌ HTTPS server error:', error.message);
-    }
-    process.exit(1);
-  });
-} else {
-  // Fallback to HTTP server
-  app.listen(PORT, () => {
-    console.log(`🚀 HTML to Image HTTP server running on port ${PORT}`);
-    console.log(`📖 API docs: http://localhost:${PORT}/api/docs`);
-    console.log(`🩺 Health check: http://localhost:${PORT}/health`);
-    console.log(`📸 Example: http://localhost:${PORT}/screenshot?url=https://example.com&width=1200&height=800`);
-    console.log(`⚠️  Running in HTTP mode - SSL certificates not found`);
-    console.log(`💡 Using per-request browser instances for better stability`);
-  });
-}
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 HTML to Image server running on port ${PORT}`);
+  console.log(`📖 API docs: http://localhost:${PORT}/api/docs`);
+  console.log(`🩺 Health check: http://localhost:${PORT}/health`);
+  console.log(`📸 Example: http://localhost:${PORT}/screenshot?url=https://example.com&width=1200&height=800`);
+  console.log(`💡 Using per-request browser instances for better stability`);
+});
