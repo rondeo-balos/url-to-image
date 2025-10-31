@@ -6,7 +6,7 @@
 set -e
 
 ENVIRONMENT=${1:-production}
-PROJECT_NAME="html-to-image"
+PROJECT_NAME="url-to-image"
 PROJECT_DIR="/var/www/$PROJECT_NAME"
 NGINX_CONFIG="/etc/nginx/sites-available/$PROJECT_NAME"
 SERVICE_USER="www-data"
