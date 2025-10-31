@@ -7,14 +7,14 @@ module.exports = {
     env: {
       NODE_ENV: 'development',
       PORT: 3000,
-      SSL_CERT_PATH: '/root/cert/n8n.gotobizpro.com.pem',
-      SSL_KEY_PATH: '/root/cert/n8n.gotobizpro.com-key.pem'
+      SSL_CERT_PATH: '/var/lib/docker/volumes/n8n_caddy_data/_data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/n8n.gotobizpro.com/n8n.gotobizpro.com.crt',
+      SSL_KEY_PATH: '/var/lib/docker/volumes/n8n_caddy_data/_data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/n8n.gotobizpro.com/n8n.gotobizpro.com.key'
     },
     env_production: {
       NODE_ENV: 'production',
       PORT: 3000,
-      SSL_CERT_PATH: '/root/cert/n8n.gotobizpro.com.pem',
-      SSL_KEY_PATH: '/root/cert/n8n.gotobizpro.com-key.pem'
+      SSL_CERT_PATH: '/var/lib/docker/volumes/n8n_caddy_data/_data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/n8n.gotobizpro.com/n8n.gotobizpro.com.crt',
+      SSL_KEY_PATH: '/var/lib/docker/volumes/n8n_caddy_data/_data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/n8n.gotobizpro.com/n8n.gotobizpro.com.key'
     },
     // PM2 configuration
     watch: false,
