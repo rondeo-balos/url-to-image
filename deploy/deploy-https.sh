@@ -79,7 +79,7 @@ chown -R www-data:www-data $APP_DIR
 # Check SSL certificates
 print_status "Checking SSL certificates..."
 SSL_CERT_PATH="/root/cert/n8n.gotobizpro.com.pem"
-SSL_KEY_PATH="/root/cert/n8n.gotobizpro.com.key"
+SSL_KEY_PATH="/root/cert/n8n.gotobizpro.com-key.pem"
 
 if [[ -f "$SSL_CERT_PATH" && -f "$SSL_KEY_PATH" ]]; then
     print_success "SSL certificates found at $SSL_CERT_PATH"
@@ -89,11 +89,11 @@ if [[ -f "$SSL_CERT_PATH" && -f "$SSL_KEY_PATH" ]]; then
     cp $SSL_KEY_PATH $APP_DIR/cert/
     chown -R www-data:www-data $APP_DIR/cert
     chmod 644 $APP_DIR/cert/n8n.gotobizpro.com.pem
-    chmod 600 $APP_DIR/cert/n8n.gotobizpro.com.key
+    chmod 600 $APP_DIR/cert/n8n.gotobizpro.com-key.pem
     
     # Update environment to use local cert path
     sed -i 's|SSL_CERT_PATH=/root/cert/n8n.gotobizpro.com.pem|SSL_CERT_PATH='$APP_DIR'/cert/n8n.gotobizpro.com.pem|g' $APP_DIR/.env
-    sed -i 's|SSL_KEY_PATH=/root/cert/n8n.gotobizpro.com.key|SSL_KEY_PATH='$APP_DIR'/cert/n8n.gotobizpro.com.key|g' $APP_DIR/.env
+    sed -i 's|SSL_KEY_PATH=/root/cert/n8n.gotobizpro.com-key.pem|SSL_KEY_PATH='$APP_DIR'/cert/n8n.gotobizpro.com-key.pem|g' $APP_DIR/.env
 else
     print_warning "SSL certificates not found at expected location"
     print_warning "Server will run in HTTP mode"
@@ -124,7 +124,7 @@ sudo -u www-data pm2 delete html-to-image 2>/dev/null || true
 
 # Update PM2 ecosystem config to use local cert paths
 sed -i 's|SSL_CERT_PATH.*|SSL_CERT_PATH: "'$APP_DIR'/cert/n8n.gotobizpro.com.pem",|g' $APP_DIR/deploy/ecosystem.config.js
-sed -i 's|SSL_KEY_PATH.*|SSL_KEY_PATH: "'$APP_DIR'/cert/n8n.gotobizpro.com.key"|g' $APP_DIR/deploy/ecosystem.config.js
+sed -i 's|SSL_KEY_PATH.*|SSL_KEY_PATH: "'$APP_DIR'/cert/n8n.gotobizpro.com-key.pem"|g' $APP_DIR/deploy/ecosystem.config.js
 
 # Setup PM2 ecosystem
 print_status "Starting PM2 application..."
