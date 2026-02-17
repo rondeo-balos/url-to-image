@@ -1,7 +1,8 @@
 module.exports = {
   apps: [{
     name: 'html-to-image',
-    script: './server.js',
+    script: 'server.js',
+    cwd: '/var/www/html-to-image',
     instances: 1, // You can increase this for load balancing
     exec_mode: 'fork', // Use 'cluster' for multiple instances
     env: {
