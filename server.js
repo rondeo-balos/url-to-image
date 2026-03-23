@@ -260,8 +260,8 @@ async function captureScreenshot(url, options = {}) {
   } finally {
     // Always clean up context + page (this does NOT kill the browser)
     try {
-      if (page) await page.close().catch(() => {});
-      if (context) await context.close().catch(() => {});
+      if (page) await page.close().catch(() => { });
+      if (context) await context.close().catch(() => { });
     } catch (cleanupError) {
       console.warn('Cleanup warning:', cleanupError.message);
     }
@@ -458,7 +458,7 @@ async function gracefulShutdown(signal) {
   if (activeCount > 0) {
     console.warn(`⚠️  Force-closing ${activeCount} remaining session(s)`);
     for (const [id, entry] of activeContexts) {
-      try { await entry.context.close(); } catch (_) {}
+      try { await entry.context.close(); } catch (_) { }
       activeContexts.delete(id);
     }
   }
@@ -493,8 +493,8 @@ process.on('unhandledRejection', (reason, promise) => {
 // ─── Server Startup ─────────────────────────────────────────────────────────────
 
 // SSL Certificate paths
-const SSL_CERT_PATH = process.env.SSL_CERT_PATH || '/root/cert/n8n.gotobizpro.com.pem';
-const SSL_KEY_PATH = process.env.SSL_KEY_PATH || '/root/cert/n8n.gotobizpro.com.key';
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH || '/var/www/html-to-image/cert/n8n.gotobizpro.com.crt';
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH || '/var/www/html-to-image/cert/n8n.gotobizpro.com.key';
 
 let httpsOptions = null;
 
