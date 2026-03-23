@@ -7,6 +7,9 @@ yarn-error.log*
 # Environment variables
 .env
 
+# SSL certificates
+cert/
+
 # Test outputs
 test-outputs/
 screenshots/

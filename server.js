@@ -80,7 +80,9 @@ async function getBrowser() {
       });
 
       browserInstance = browser;
-      console.log('✅ Singleton browser ready (PID:', browser.process()?.pid ?? 'unknown', ')');
+      let pid = 'unknown';
+      try { pid = browser.process?.()?.pid || browser.process?.pid || 'unknown'; } catch (_) { }
+      console.log('✅ Singleton browser ready (PID:', pid, ')');
       return browser;
     } catch (error) {
       console.error('❌ Failed to launch browser:', error.message);
