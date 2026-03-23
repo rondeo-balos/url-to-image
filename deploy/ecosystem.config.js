@@ -8,14 +8,14 @@ module.exports = {
     env: {
       NODE_ENV: 'development',
       PORT: 3000,
-      SSL_CERT_PATH: '/var/www/html-to-image/cert/n8n.gotobizpro.com.crt',
-      SSL_KEY_PATH: '/var/www/html-to-image/cert/n8n.gotobizpro.com.key'
+      SSL_CERT_PATH: '/path/to/your/cert.crt',
+      SSL_KEY_PATH: '/path/to/your/cert.key'
     },
     env_production: {
       NODE_ENV: 'production',
       PORT: 3000,
-      SSL_CERT_PATH: '/var/www/html-to-image/cert/n8n.gotobizpro.com.crt',
-      SSL_KEY_PATH: '/var/www/html-to-image/cert/n8n.gotobizpro.com.key'
+      SSL_CERT_PATH: '/path/to/your/cert.crt',
+      SSL_KEY_PATH: '/path/to/your/cert.key'
     },
     // PM2 configuration
     watch: false,

@@ -495,8 +495,8 @@ process.on('unhandledRejection', (reason, promise) => {
 // ─── Server Startup ─────────────────────────────────────────────────────────────
 
 // SSL Certificate paths
-const SSL_CERT_PATH = process.env.SSL_CERT_PATH || '/var/www/html-to-image/cert/n8n.gotobizpro.com.crt';
-const SSL_KEY_PATH = process.env.SSL_KEY_PATH || '/var/www/html-to-image/cert/n8n.gotobizpro.com.key';
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH || '';
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH || '';
 
 let httpsOptions = null;
 
