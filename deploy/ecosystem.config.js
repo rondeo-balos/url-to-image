@@ -19,7 +19,8 @@ module.exports = {
     },
     // PM2 configuration
     watch: false,
-    max_memory_restart: '1G',
+    max_memory_restart: '512M',
+    kill_timeout: 10000,
     error_file: './logs/err.log',
     out_file: './logs/out.log',
     log_file: './logs/combined.log',

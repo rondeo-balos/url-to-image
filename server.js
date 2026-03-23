@@ -12,44 +12,160 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// ─── Configuration ──────────────────────────────────────────────────────────────
+
+const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT) || 3;
+const CONTEXT_MAX_AGE_MS = 60_000;       // Force-kill contexts older than 60s
+const ZOMBIE_CHECK_INTERVAL_MS = 15_000; // Check for zombies every 15s
+const QUEUE_TIMEOUT_MS = 30_000;         // Max time a request waits in queue
+const SCREENSHOT_TIMEOUT_MS = 30_000;    // Default page navigation timeout
+const GRACEFUL_SHUTDOWN_MS = 10_000;     // Time to wait for in-flight work on shutdown
+
+// ─── Middleware ──────────────────────────────────────────────────────────────────
+
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
-// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: 'Too many requests from this IP, please try again later.',
 });
 app.use(limiter);
 
-// Browser configuration for Playwright
+// ─── Browser Configuration (Playwright) ─────────────────────────────────────────
+
 const BROWSER_CONFIG = {
   headless: true,
   args: [
     '--no-sandbox',
     '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage'
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--single-process'
   ],
   timeout: 30000
 };
 
-// Create a new browser instance using Playwright
-async function createBrowser() {
-  try {
-    console.log('Creating new Chromium browser instance...');
-    const browser = await chromium.launch(BROWSER_CONFIG);
-    console.log('Browser created successfully');
-    return browser;
-  } catch (error) {
-    console.error('Failed to create browser instance:', error.message);
-    throw new Error('Failed to create browser instance');
+// ─── Singleton Browser Manager ──────────────────────────────────────────────────
+
+let browserInstance = null;
+let browserLaunchPromise = null;
+let isShuttingDown = false;
+
+/**
+ * Get or create the singleton browser instance.
+ * If the browser is disconnected or doesn't exist, a new one is launched.
+ * Uses a launch promise to prevent concurrent launches.
+ */
+async function getBrowser() {
+  if (browserInstance && browserInstance.isConnected()) {
+    return browserInstance;
+  }
+
+  // Prevent multiple simultaneous launches
+  if (browserLaunchPromise) {
+    return browserLaunchPromise;
+  }
+
+  browserLaunchPromise = (async () => {
+    try {
+      console.log('🚀 Launching singleton Chromium browser...');
+      const browser = await chromium.launch(BROWSER_CONFIG);
+
+      browser.on('disconnected', () => {
+        console.warn('⚠️  Browser disconnected unexpectedly. Will re-launch on next request.');
+        browserInstance = null;
+      });
+
+      browserInstance = browser;
+      console.log('✅ Singleton browser ready (PID:', browser.process()?.pid ?? 'unknown', ')');
+      return browser;
+    } catch (error) {
+      console.error('❌ Failed to launch browser:', error.message);
+      throw new Error('Failed to launch browser instance');
+    } finally {
+      browserLaunchPromise = null;
+    }
+  })();
+
+  return browserLaunchPromise;
+}
+
+// ─── Concurrency Limiter (Semaphore + Queue) ────────────────────────────────────
+
+let activeCount = 0;
+const waitQueue = [];
+
+function acquireSlot() {
+  return new Promise((resolve, reject) => {
+    if (activeCount < MAX_CONCURRENT) {
+      activeCount++;
+      return resolve();
+    }
+
+    // Queue the request with a timeout
+    const timer = setTimeout(() => {
+      const idx = waitQueue.indexOf(entry);
+      if (idx !== -1) waitQueue.splice(idx, 1);
+      reject(new Error('Screenshot queue timeout — server is overloaded'));
+    }, QUEUE_TIMEOUT_MS);
+
+    const entry = { resolve, reject, timer };
+    waitQueue.push(entry);
+  });
+}
+
+function releaseSlot() {
+  if (waitQueue.length > 0) {
+    const next = waitQueue.shift();
+    clearTimeout(next.timer);
+    next.resolve();
+  } else {
+    activeCount--;
   }
 }
 
-// Validate URL
+// ─── Active Context Tracker (for zombie cleanup) ────────────────────────────────
+
+/** @type {Map<string, { context: import('playwright').BrowserContext, createdAt: number }>} */
+const activeContexts = new Map();
+let contextIdCounter = 0;
+
+function trackContext(context) {
+  const id = String(++contextIdCounter);
+  activeContexts.set(id, { context, createdAt: Date.now() });
+  return id;
+}
+
+function untrackContext(id) {
+  activeContexts.delete(id);
+}
+
+// ─── Zombie Cleanup Watchdog ────────────────────────────────────────────────────
+
+const zombieInterval = setInterval(async () => {
+  const now = Date.now();
+  for (const [id, entry] of activeContexts) {
+    const age = now - entry.createdAt;
+    if (age > CONTEXT_MAX_AGE_MS) {
+      console.warn(`🧟 Killing zombie context ${id} (age: ${Math.round(age / 1000)}s)`);
+      try {
+        await entry.context.close();
+      } catch (e) {
+        console.warn(`   Failed to close zombie context ${id}:`, e.message);
+      }
+      activeContexts.delete(id);
+    }
+  }
+}, ZOMBIE_CHECK_INTERVAL_MS);
+
+// Don't let the interval keep the process alive during shutdown
+zombieInterval.unref();
+
+// ─── Helpers ────────────────────────────────────────────────────────────────────
+
 function isValidUrl(string) {
   try {
     const url = new URL(string);
@@ -59,7 +175,21 @@ function isValidUrl(string) {
   }
 }
 
-// Main screenshot function using Playwright
+function mapWaitUntil(waitUntil) {
+  switch (waitUntil) {
+    case 'load':
+      return 'load';
+    case 'domcontentloaded':
+      return 'domcontentloaded';
+    case 'networkidle0':
+    case 'networkidle2':
+    default:
+      return 'networkidle';
+  }
+}
+
+// ─── Core Screenshot Function ───────────────────────────────────────────────────
+
 async function captureScreenshot(url, options = {}) {
   const {
     width = 1200,
@@ -67,47 +197,38 @@ async function captureScreenshot(url, options = {}) {
     quality = 80,
     fullPage = false,
     waitUntil = 'networkidle',
-    timeout = 30000
+    timeout = SCREENSHOT_TIMEOUT_MS
   } = options;
 
-  let browser;
-  let context;
-  let page;
-  
+  // Acquire a concurrency slot (may wait in queue)
+  await acquireSlot();
+
+  let context = null;
+  let page = null;
+  let contextId = null;
+
   try {
-    // Create a fresh browser instance for this request
-    browser = await createBrowser();
-    
-    // Create browser context (like an incognito window)
+    if (isShuttingDown) {
+      throw new Error('Server is shutting down');
+    }
+
+    const browser = await getBrowser();
+
+    // Create a lightweight context (NOT a new browser process)
     context = await browser.newContext({
-      viewport: { 
-        width: parseInt(width), 
+      viewport: {
+        width: parseInt(width),
         height: parseInt(height)
       },
       userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
-    
+
+    contextId = trackContext(context);
     page = await context.newPage();
 
-    // Map waitUntil options
-    let playwrightWaitUntil;
-    switch (waitUntil) {
-      case 'load':
-        playwrightWaitUntil = 'load';
-        break;
-      case 'domcontentloaded':
-        playwrightWaitUntil = 'domcontentloaded';
-        break;
-      case 'networkidle0':
-      case 'networkidle2':
-      default:
-        playwrightWaitUntil = 'networkidle';
-        break;
-    }
-
-    // Navigate to URL with timeout
-    await page.goto(url, { 
-      waitUntil: playwrightWaitUntil,
+    // Navigate with timeout
+    await page.goto(url, {
+      waitUntil: mapWaitUntil(waitUntil),
       timeout: parseInt(timeout)
     });
 
@@ -117,7 +238,6 @@ async function captureScreenshot(url, options = {}) {
       fullPage: fullPage === 'true' || fullPage === true
     };
 
-    // Add clip if not full page
     if (!screenshotOptions.fullPage) {
       screenshotOptions.clip = {
         x: 0,
@@ -129,7 +249,7 @@ async function captureScreenshot(url, options = {}) {
 
     const screenshot = await page.screenshot(screenshotOptions);
 
-    // Optimize to WebP using Sharp
+    // Optimize to WebP
     const optimizedImage = await sharp(screenshot)
       .webp({ quality: parseInt(quality) })
       .toBuffer();
@@ -138,122 +258,112 @@ async function captureScreenshot(url, options = {}) {
   } catch (error) {
     throw new Error(`Screenshot failed: ${error.message}`);
   } finally {
-    // Clean up resources in proper order
+    // Always clean up context + page (this does NOT kill the browser)
     try {
-      if (page) await page.close();
-      if (context) await context.close();
-      if (browser) await browser.close();
+      if (page) await page.close().catch(() => {});
+      if (context) await context.close().catch(() => {});
     } catch (cleanupError) {
       console.warn('Cleanup warning:', cleanupError.message);
     }
+    if (contextId) untrackContext(contextId);
+    releaseSlot();
   }
 }
 
-// Health check endpoint
+// ─── Routes ─────────────────────────────────────────────────────────────────────
+
+// Health check — now with operational metrics
 app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
+  res.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    browserStatus: browserInstance?.isConnected() ? 'connected' : 'disconnected',
+    activeSessions: activeCount,
+    queuedRequests: waitQueue.length,
+    maxConcurrent: MAX_CONCURRENT
   });
 });
 
-// Main screenshot endpoint
+// GET screenshot
 app.get('/screenshot', async (req, res) => {
   try {
     const { url, width, height, quality, fullPage, waitUntil, timeout } = req.query;
 
-    // Validate required parameters
     if (!url) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'URL parameter is required',
         example: '/screenshot?url=https://example.com&width=1200&height=800'
       });
     }
 
-    // Validate URL format
     if (!isValidUrl(url)) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid URL format. Must include http:// or https://'
       });
     }
 
-    // Validate dimensions
     const widthNum = parseInt(width) || 1200;
     const heightNum = parseInt(height) || 800;
-    
+
     if (widthNum < 100 || widthNum > 4000) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Width must be between 100 and 4000 pixels'
       });
     }
-    
+
     if (heightNum < 100 || heightNum > 4000) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Height must be between 100 and 4000 pixels'
       });
     }
 
-    // Capture screenshot with timeout
-    const screenshotPromise = captureScreenshot(url, {
+    const imageBuffer = await captureScreenshot(url, {
       width: widthNum,
       height: heightNum,
       quality: quality || 80,
       fullPage,
       waitUntil: waitUntil || 'networkidle2',
-      timeout: timeout || 30000
+      timeout: timeout || SCREENSHOT_TIMEOUT_MS
     });
-    
-    // Add overall timeout for the entire request
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Screenshot request timeout')), 60000);
-    });
-    
-    const imageBuffer = await Promise.race([screenshotPromise, timeoutPromise]);
 
-    // Set headers for image response
     res.set({
       'Content-Type': 'image/webp',
       'Content-Length': imageBuffer.length,
-      'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+      'Cache-Control': 'public, max-age=3600',
       'X-Screenshot-URL': url,
       'X-Screenshot-Dimensions': `${widthNum}x${heightNum}`
     });
 
     res.send(imageBuffer);
   } catch (error) {
-    console.error('Screenshot error:', error);
-    res.status(500).json({ 
+    console.error('Screenshot error:', error.message);
+    const status = error.message.includes('queue timeout') ? 503 : 500;
+    res.status(status).json({
       error: 'Failed to capture screenshot',
       message: error.message
     });
   }
 });
 
-// POST endpoint for bulk screenshots or complex requests
+// POST screenshot
 app.post('/screenshot', async (req, res) => {
   try {
     const { url, options = {} } = req.body;
 
     if (!url) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'URL is required in request body'
       });
     }
 
     if (!isValidUrl(url)) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Invalid URL format. Must include http:// or https://'
       });
     }
 
-    // Capture screenshot with timeout
-    const screenshotPromise = captureScreenshot(url, options);
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Screenshot request timeout')), 60000);
-    });
-    
-    const imageBuffer = await Promise.race([screenshotPromise, timeoutPromise]);
+    const imageBuffer = await captureScreenshot(url, options);
 
     res.set({
       'Content-Type': 'image/webp',
@@ -263,20 +373,21 @@ app.post('/screenshot', async (req, res) => {
 
     res.send(imageBuffer);
   } catch (error) {
-    console.error('Screenshot error:', error);
-    res.status(500).json({ 
+    console.error('Screenshot error:', error.message);
+    const status = error.message.includes('queue timeout') ? 503 : 500;
+    res.status(status).json({
       error: 'Failed to capture screenshot',
       message: error.message
     });
   }
 });
 
-// API documentation endpoint
+// API documentation
 app.get('/api/docs', (req, res) => {
   res.json({
     title: 'HTML to Image API',
-    version: '1.0.0',
-    description: 'Convert any URL to optimized WebP images',
+    version: '2.0.0',
+    description: 'Convert any URL to optimized WebP images (singleton browser, concurrency-limited)',
     endpoints: {
       'GET /screenshot': {
         description: 'Capture screenshot of a URL',
@@ -286,7 +397,7 @@ app.get('/api/docs', (req, res) => {
           height: { type: 'number', default: 800, description: 'Screenshot height (100-4000px)' },
           quality: { type: 'number', default: 80, description: 'WebP quality (1-100)' },
           fullPage: { type: 'boolean', default: false, description: 'Capture full page height' },
-          waitUntil: { type: 'string', default: 'networkidle2', description: 'When to consider loading finished' },
+          waitUntil: { type: 'string', default: 'networkidle', description: 'When to consider loading finished' },
           timeout: { type: 'number', default: 30000, description: 'Navigation timeout in ms' }
         },
         example: '/screenshot?url=https://example.com&width=1200&height=800&quality=85'
@@ -299,7 +410,7 @@ app.get('/api/docs', (req, res) => {
         }
       },
       'GET /health': {
-        description: 'Health check endpoint'
+        description: 'Health check with operational metrics (activeSessions, queuedRequests, browserStatus)'
       }
     }
   });
@@ -307,7 +418,7 @@ app.get('/api/docs', (req, res) => {
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     error: 'Endpoint not found',
     availableEndpoints: ['/screenshot', '/health', '/api/docs']
   });
@@ -316,27 +427,60 @@ app.use('*', (req, res) => {
 // Error handler
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ 
+  res.status(500).json({
     error: 'Internal server error',
     message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
   });
 });
 
-// Graceful shutdown
+// ─── Graceful Shutdown ──────────────────────────────────────────────────────────
+
 async function gracefulShutdown(signal) {
-  console.log(`Received ${signal}. Shutting down gracefully...`);
-  
-  // Since we're using per-request browsers, no need for global cleanup
-  // The process exit will handle any remaining resources
-  
-  console.log('Server shutdown complete');
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`\n🛑 Received ${signal}. Shutting down gracefully...`);
+
+  // Reject any queued requests
+  while (waitQueue.length > 0) {
+    const entry = waitQueue.shift();
+    clearTimeout(entry.timer);
+    entry.reject(new Error('Server is shutting down'));
+  }
+
+  // Wait for active sessions to finish (up to GRACEFUL_SHUTDOWN_MS)
+  const deadline = Date.now() + GRACEFUL_SHUTDOWN_MS;
+  while (activeCount > 0 && Date.now() < deadline) {
+    console.log(`   Waiting for ${activeCount} active session(s)...`);
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  if (activeCount > 0) {
+    console.warn(`⚠️  Force-closing ${activeCount} remaining session(s)`);
+    for (const [id, entry] of activeContexts) {
+      try { await entry.context.close(); } catch (_) {}
+      activeContexts.delete(id);
+    }
+  }
+
+  // Close the singleton browser
+  if (browserInstance) {
+    try {
+      await browserInstance.close();
+      console.log('✅ Browser closed');
+    } catch (e) {
+      console.warn('Browser close error:', e.message);
+    }
+  }
+
+  clearInterval(zombieInterval);
+  console.log('👋 Server shutdown complete');
   process.exit(0);
 }
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// Handle uncaught exceptions and unhandled rejections
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
   gracefulShutdown('uncaughtException');
@@ -344,20 +488,16 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit on unhandled rejections in production, just log them
-  if (process.env.NODE_ENV !== 'production') {
-    gracefulShutdown('unhandledRejection');
-  }
 });
+
+// ─── Server Startup ─────────────────────────────────────────────────────────────
 
 // SSL Certificate paths
 const SSL_CERT_PATH = process.env.SSL_CERT_PATH || '/root/cert/n8n.gotobizpro.com.pem';
 const SSL_KEY_PATH = process.env.SSL_KEY_PATH || '/root/cert/n8n.gotobizpro.com.key';
 
-// HTTPS configuration
 let httpsOptions = null;
 
-// Check if SSL certificates exist
 function loadSSLCertificates() {
   try {
     if (fs.existsSync(SSL_CERT_PATH) && fs.existsSync(SSL_KEY_PATH)) {
@@ -377,40 +517,44 @@ function loadSSLCertificates() {
   }
 }
 
-// Start server with HTTPS support
-const hasSSL = loadSSLCertificates();
+async function startServer() {
+  // Pre-launch the browser so the first request doesn't pay the cold-start cost
+  try {
+    await getBrowser();
+  } catch (e) {
+    console.error('❌ Failed to pre-launch browser. Requests will attempt lazy launch.', e.message);
+  }
 
-if (hasSSL && httpsOptions) {
-  // Create HTTPS server
-  const httpsServer = https.createServer(httpsOptions, app);
-  
-  httpsServer.listen(PORT, () => {
-    console.log(`🚀 HTML to Image HTTPS server running on port ${PORT}`);
-    console.log(`📖 API docs: https://localhost:${PORT}/api/docs`);
-    console.log(`🩺 Health check: https://localhost:${PORT}/health`);
-    console.log(`📸 Example: https://localhost:${PORT}/screenshot?url=https://example.com&width=1200&height=800`);
-    console.log(`🔒 SSL certificates: ${SSL_CERT_PATH}`);
-    console.log(`💡 Using per-request browser instances for better stability`);
-  });
-  
-  httpsServer.on('error', (error) => {
-    if (error.code === 'EACCES') {
-      console.error(`❌ Permission denied to bind to port ${PORT}. Try running with sudo or use a port > 1024.`);
-    } else if (error.code === 'EADDRINUSE') {
-      console.error(`❌ Port ${PORT} is already in use.`);
-    } else {
-      console.error('❌ HTTPS server error:', error.message);
-    }
-    process.exit(1);
-  });
-} else {
-  // Fallback to HTTP server
-  app.listen(PORT, () => {
-    console.log(`🚀 HTML to Image HTTP server running on port ${PORT}`);
-    console.log(`📖 API docs: http://localhost:${PORT}/api/docs`);
-    console.log(`🩺 Health check: http://localhost:${PORT}/health`);
-    console.log(`📸 Example: http://localhost:${PORT}/screenshot?url=https://example.com&width=1200&height=800`);
-    console.log(`⚠️  Running in HTTP mode - SSL certificates not found`);
-    console.log(`💡 Using per-request browser instances for better stability`);
-  });
+  const hasSSL = loadSSLCertificates();
+
+  const startupInfo = () => {
+    const proto = hasSSL ? 'https' : 'http';
+    console.log(`🚀 HTML to Image server running on ${proto}://localhost:${PORT}`);
+    console.log(`📖 API docs: ${proto}://localhost:${PORT}/api/docs`);
+    console.log(`🩺 Health check: ${proto}://localhost:${PORT}/health`);
+    console.log(`📸 Example: ${proto}://localhost:${PORT}/screenshot?url=https://example.com&width=1200&height=800`);
+    console.log(`🔧 Max concurrent: ${MAX_CONCURRENT} | Context max age: ${CONTEXT_MAX_AGE_MS / 1000}s`);
+    if (hasSSL) console.log(`🔒 SSL: ${SSL_CERT_PATH}`);
+  };
+
+  if (hasSSL && httpsOptions) {
+    const httpsServer = https.createServer(httpsOptions, app);
+
+    httpsServer.listen(PORT, () => startupInfo());
+
+    httpsServer.on('error', (error) => {
+      if (error.code === 'EACCES') {
+        console.error(`❌ Permission denied to bind to port ${PORT}. Try running with sudo or use a port > 1024.`);
+      } else if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use.`);
+      } else {
+        console.error('❌ HTTPS server error:', error.message);
+      }
+      process.exit(1);
+    });
+  } else {
+    app.listen(PORT, () => startupInfo());
+  }
 }
+
+startServer();
