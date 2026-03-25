@@ -8,14 +8,14 @@ module.exports = {
     env: {
       NODE_ENV: 'development',
       PORT: 3000,
-      MAX_CONCURRENT: 3,
+      MAX_CONCURRENT: 10,
       SSL_CERT_PATH: '/path/to/your/cert.crt',
       SSL_KEY_PATH: '/path/to/your/cert.key'
     },
     env_production: {
       NODE_ENV: 'production',
       PORT: 3000,
-      MAX_CONCURRENT: 3,
+      MAX_CONCURRENT: 10,
       SSL_CERT_PATH: '/path/to/your/cert.crt',
       SSL_KEY_PATH: '/path/to/your/cert.key'
     },

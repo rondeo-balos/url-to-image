@@ -214,16 +214,34 @@ async function captureScreenshot(url, options = {}) {
       throw new Error('Server is shutting down');
     }
 
-    const browser = await getBrowser();
+    let browser = await getBrowser();
 
     // Create a lightweight context (NOT a new browser process)
-    context = await browser.newContext({
-      viewport: {
-        width: parseInt(width),
-        height: parseInt(height)
-      },
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    });
+    // If the browser died between getBrowser() and newContext(), retry once
+    try {
+      context = await browser.newContext({
+        viewport: {
+          width: parseInt(width),
+          height: parseInt(height)
+        },
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      });
+    } catch (contextError) {
+      if (contextError.message.includes('has been closed') || contextError.message.includes('Target closed')) {
+        console.warn('⚠️  Browser died mid-request, re-launching...');
+        browserInstance = null;
+        browser = await getBrowser();
+        context = await browser.newContext({
+          viewport: {
+            width: parseInt(width),
+            height: parseInt(height)
+          },
+          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        });
+      } else {
+        throw contextError;
+      }
+    }
 
     contextId = trackContext(context);
     page = await context.newPage();
