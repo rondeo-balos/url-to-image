@@ -250,3 +250,14 @@ The server provides detailed logging for debugging:
 ## License
 
 MIT License - see LICENSE file for details
+
+# Pull the latest
+cd /var/www/html-to-image && git checkout -- . && git pull
+
+# Edit the ecosystem config on the server with the real cert paths
+sed -i "s|/path/to/your/cert.crt|/var/www/html-to-image/cert/n8n.gotobizpro.com.crt|g" deploy/ecosystem.config.js
+sed -i "s|/path/to/your/cert.key|/var/www/html-to-image/cert/n8n.gotobizpro.com.key|g" deploy/ecosystem.config.js
+
+# Restart
+sudo -u www-data pm2 delete html-to-image
+sudo -u www-data pm2 start /var/www/html-to-image/deploy/ecosystem.config.js --env production
