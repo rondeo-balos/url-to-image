@@ -140,25 +140,28 @@ Precedence: PM2's `env_production` block in `deploy/ecosystem.config.js` sets `S
 | Reinstall browser (prod) | `sudo -u www-data npx playwright install chromium && sudo npx playwright install-deps chromium` |
 | Tune throughput | Change `MAX_CONCURRENT` in `deploy/ecosystem.config.js`, then restart PM2 |
 
-Some deploy scripts (`check-and-deploy.sh`, `fix-pm2-permissions.sh`) use `PM2_HOME=/var/www/.pm2`. `deploy-https.sh` does not. Check which PM2 home the live process uses before you run commands.
+The live process uses **`PM2_HOME=/var/www/.pm2`** (verified on the VPS, 2026-09-24), so prefix every prod `pm2` command with it, e.g. `sudo -u www-data PM2_HOME=/var/www/.pm2 pm2 list`. `deploy-https.sh` doesn't set it.
 
 ## Deployment
 
-Production (from the git history and the old README's notes):
+Production (verified on the VPS on 2026-09-24; full details in [`../n8n-vps/HANDOVER.md` §4.3](../n8n-vps/HANDOVER.md)):
 
 - VPS host `n8n.gotobizpro.com`. The app lives in `/var/www/html-to-image` and runs as `www-data` under PM2 (`deploy/ecosystem.config.js`, fork mode, 1 instance, `max_memory_restart: 512M`).
 - Node serves **HTTPS directly on port 3000**. There is no Nginx in front, and `ufw` allows port 3000.
-- TLS certs are **borrowed from the n8n Caddy container**. `deploy/deploy-https.sh` copies them from `/var/lib/docker/volumes/n8n_caddy_data/_data/caddy/certificates/.../n8n.gotobizpro.com/` into `/var/www/html-to-image/cert/`, which is gitignored.
+- TLS certs are **borrowed from the n8n Caddy container**. `deploy/deploy-https.sh` copies them from `/var/lib/docker/volumes/n8n_caddy_data/_data/caddy/certificates/.../n8n.gotobizpro.com/` into `/var/www/html-to-image/cert/`, which is gitignored. A **root cron job runs daily at 03:00 UTC** (`/usr/local/bin/update-html-to-image-certs.sh`): it re-copies the certs and restarts the app, so renewals are picked up automatically.
+- **The app doesn't come back after a reboot.** `pm2-www-data.service` points at the wrong PM2 home and has been failed since 2026-03-23. Until that's fixed, start it by hand after a reboot: `cd /var/www/html-to-image && sudo -u www-data PM2_HOME=/var/www/.pm2 pm2 start deploy/ecosystem.config.js`.
+- The server checkout has a local change to `deploy/ecosystem.config.js` (real cert paths) and is behind `origin/main`. PM2 runs it with `NODE_ENV=development`.
 - First-time deploy: see [HTTPS_DEPLOYMENT.md](HTTPS_DEPLOYMENT.md) (`sudo bash deploy/deploy-https.sh`). The generic Nginx + Let's Encrypt route is in [DEPLOYMENT.md](DEPLOYMENT.md).
 
-Update procedure used on the server. The committed ecosystem file has placeholder cert paths, so they must be patched after every pull:
+Update procedure used on the server (the VPS handover has a `git stash`-based alternative). The committed ecosystem file has placeholder cert paths, so they must be patched after every pull:
 
 ```bash
 cd /var/www/html-to-image && git checkout -- . && git pull
 sed -i "s|/path/to/your/cert.crt|/var/www/html-to-image/cert/n8n.gotobizpro.com.crt|g" deploy/ecosystem.config.js
 sed -i "s|/path/to/your/cert.key|/var/www/html-to-image/cert/n8n.gotobizpro.com.key|g" deploy/ecosystem.config.js
-sudo -u www-data pm2 delete html-to-image
-sudo -u www-data pm2 start /var/www/html-to-image/deploy/ecosystem.config.js --env production
+sudo -u www-data PM2_HOME=/var/www/.pm2 pm2 delete html-to-image
+sudo -u www-data PM2_HOME=/var/www/.pm2 pm2 start /var/www/html-to-image/deploy/ecosystem.config.js --env production
+sudo -u www-data PM2_HOME=/var/www/.pm2 pm2 save
 ```
 
 If `npm install` pulled a new Playwright version, also reinstall Chromium as `www-data` (see Common tasks).
@@ -170,8 +173,8 @@ If `npm install` pulled a new Playwright version, also reinstall Chromium as `ww
 
 ## Gotchas and handover notes
 
-- **No authentication, and any URL is accepted.** Anyone who can reach port 3000 can make the server fetch any http(s) URL. That includes `localhost` and internal addresses, so this is an SSRF risk. The only protection is the per-IP rate limit and CORS `*`. Add an API key or an allowlist if the service is exposed more widely.
-- **Certificate renewal.** The certs are *copied* from Caddy, so when Caddy renews them (about every 90 days) the copies here go stale. Re-copy them (rerun the cert part of `deploy-https.sh`) and restart PM2, or HTTPS will start failing with an expired cert.
+- **No authentication, and any URL is accepted.** Anyone who can reach port 3000 can make the server fetch any http(s) URL. That includes `localhost`, the VPS's Docker networks and **the office server at `10.8.0.2` over the VPN**, because the VPS is the WireGuard server. This is an SSRF risk. The only protection is the per-IP rate limit and CORS `*`. Add an API key or an allowlist if the service is exposed more widely.
+- **Certificate renewal.** The certs are *copied* from Caddy. The daily 03:00 UTC cron re-copies them, but it **always** restarts the app, even when the cert hasn't changed, so in-flight screenshots fail once a day. Compare the cert first and restart only on change. If HTTPS errors appear, check `/var/log/html-to-image-cert-update.log`.
 - **Concurrency model.** There is one shared Chromium, with a new browser context per request. `MAX_CONCURRENT` slots are available, and waiting requests get a 503 after 30s in the queue. A watchdog force-closes any context older than **60s**. A caller-supplied `timeout` above about 55s will therefore be killed mid-navigation. If the browser crashes, it is relaunched on the next request, and context creation is retried once.
 - `uncaughtException` triggers a graceful shutdown, which calls `process.exit(0)`. PM2 then restarts the process (`autorestart`, `max_restarts: 10`).
 - The rate limiter has no `trust proxy` setting. If you put Nginx or another proxy in front, every client will share the proxy's IP and hit the 100 requests per 15 minutes limit together.
