@@ -144,7 +144,7 @@ The live process uses **`PM2_HOME=/var/www/.pm2`** (verified on the VPS, 2026-09
 
 ## Deployment
 
-Production (verified on the VPS on 2026-09-24; full details in [`../n8n-vps/HANDOVER.md` §4.3](../n8n-vps/HANDOVER.md)):
+Production (verified on the VPS on 2026-09-24; full details in [`../docs/n8n-vps/HANDOVER.md` §4.3](../docs/n8n-vps/HANDOVER.md)):
 
 - VPS host `n8n.gotobizpro.com`. The app lives in `/var/www/html-to-image` and runs as `www-data` under PM2 (`deploy/ecosystem.config.js`, fork mode, 1 instance, `max_memory_restart: 512M`).
 - Node serves **HTTPS directly on port 3000**. There is no Nginx in front, and `ufw` allows port 3000.
